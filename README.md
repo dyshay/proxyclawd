@@ -23,7 +23,7 @@ cargo build --release
 1. Start the proxy:
 
 ```bash
-./mitm-proxy
+./proxyclawd
 ```
 
 2. The proxy generates a CA certificate (`ca.crt`) on first run. Install it:

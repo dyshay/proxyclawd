@@ -83,43 +83,43 @@ jobs:
 
       - name: Strip binary (Linux)
         if: runner.os == 'Linux' && !matrix.use_cross
-        run: strip target/${{ matrix.target }}/release/mitm-proxy
+        run: strip target/${{ matrix.target }}/release/proxyclawd
 
       - name: Strip binary (Linux cross)
         if: runner.os == 'Linux' && matrix.use_cross
         run: |
           sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-          aarch64-linux-gnu-strip target/${{ matrix.target }}/release/mitm-proxy
+          aarch64-linux-gnu-strip target/${{ matrix.target }}/release/proxyclawd
 
       - name: Strip binary (macOS)
         if: runner.os == 'macOS'
-        run: strip target/${{ matrix.target }}/release/mitm-proxy
+        run: strip target/${{ matrix.target }}/release/proxyclawd
 
       - name: Rename artifact (Unix)
         if: runner.os != 'Windows'
         run: |
-          mv target/${{ matrix.target }}/release/mitm-proxy \
-             mitm-proxy-${{ matrix.target }}
+          mv target/${{ matrix.target }}/release/proxyclawd \
+             proxyclawd-${{ matrix.target }}
 
       - name: Rename artifact (Windows)
         if: runner.os == 'Windows'
         run: |
-          mv target/${{ matrix.target }}/release/mitm-proxy.exe `
-             mitm-proxy-${{ matrix.target }}.exe
+          mv target/${{ matrix.target }}/release/proxyclawd.exe `
+             proxyclawd-${{ matrix.target }}.exe
 
       - name: Upload artifact (Unix)
         if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: mitm-proxy-${{ matrix.target }}
-          path: mitm-proxy-${{ matrix.target }}
+          name: proxyclawd-${{ matrix.target }}
+          path: proxyclawd-${{ matrix.target }}
 
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: mitm-proxy-${{ matrix.target }}
-          path: mitm-proxy-${{ matrix.target }}.exe
+          name: proxyclawd-${{ matrix.target }}
+          path: proxyclawd-${{ matrix.target }}.exe
 
   release:
     name: Create Release
@@ -136,7 +136,7 @@ jobs:
       - name: Collect binaries
         run: |
           mkdir -p release
-          find artifacts -type f -name 'mitm-proxy*' -exec mv {} release/ \;
+          find artifacts -type f -name 'proxyclawd*' -exec mv {} release/ \;
           ls -la release/
 
       - name: Create tag
