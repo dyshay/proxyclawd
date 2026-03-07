@@ -3,8 +3,9 @@ use std::sync::Arc;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::Deserialize;
 use tokio::sync::{broadcast, oneshot, Mutex};
 use tower_http::services::ServeDir;
 
@@ -13,18 +14,21 @@ use crate::state::{AppState, InterceptedRequest, ProxyEvent};
 struct WebState {
     requests: Mutex<Vec<InterceptedRequest>>,
     event_tx: broadcast::Sender<ProxyEvent>,
+    ca_cert_path: String,
 }
 
 pub async fn run_web_server(
     port: u16,
     event_tx: broadcast::Sender<ProxyEvent>,
     ready_tx: oneshot::Sender<()>,
+    ca_cert_path: String,
 ) -> anyhow::Result<()> {
     let mut event_rx = event_tx.subscribe();
 
     let state = Arc::new(WebState {
         requests: Mutex::new(Vec::new()),
         event_tx: event_tx.clone(),
+        ca_cert_path,
     });
 
     // Spawn task to keep shared request list updated from events
@@ -61,6 +65,7 @@ pub async fn run_web_server(
 
     let app = Router::new()
         .route("/api/requests", get(get_requests))
+        .route("/api/send", post(post_send))
         .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new(&frontend_dir).append_index_html_on_directories(true))
         .with_state(state);
@@ -74,6 +79,8 @@ pub async fn run_web_server(
     axum::serve(listener, app).await?;
     Ok(())
 }
+
+// --- Handlers ---
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -128,4 +135,43 @@ async fn get_requests(
 ) -> Json<Vec<InterceptedRequest>> {
     let requests = state.requests.lock().await;
     Json(requests.clone())
+}
+
+#[derive(Deserialize)]
+struct SendBody {
+    message: String,
+    #[serde(default)]
+    continue_conversation: bool,
+}
+
+/// POST /api/send — spawn a claude subprocess to send a message
+async fn post_send(
+    State(state): State<Arc<WebState>>,
+    Json(body): Json<SendBody>,
+) -> impl IntoResponse {
+    let message = body.message.trim().to_string();
+    if message.is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Message cannot be empty"
+            })),
+        );
+    }
+
+    let ca_cert_path = state.ca_cert_path.clone();
+    let cont = body.continue_conversation;
+
+    tokio::spawn(async move {
+        if let Err(e) = crate::claude_subprocess::spawn_claude_message(&message, cont, &ca_cert_path).await {
+            tracing::error!("Web-initiated claude subprocess failed: {:#}", e);
+        }
+    });
+
+    (
+        axum::http::StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "spawned",
+        })),
+    )
 }

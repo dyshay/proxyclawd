@@ -1,13 +1,16 @@
 # ProxyClawd
 
-MITM proxy that intercepts traffic between Claude Code CLI and `api.anthropic.com`, displaying prompts and streamed responses in a real-time terminal UI or web interface.
+MITM proxy for Claude Code with real-time TUI & web UI — intercept, inspect, and **send your own messages** via Claude Code subprocess.
 
 ## Features
 
-- HTTPS MITM via CONNECT tunnel with runtime TLS certificate generation
-- SSE stream parsing with zero-latency forwarding
-- Three-panel TUI: request list, prompt view, live streaming response
-- Web UI (React + Tailwind) with WebSocket for real-time viewing in the browser
+- **HTTPS MITM** via CONNECT tunnel with runtime TLS certificate generation
+- **SSE stream parsing** with zero-latency forwarding
+- **Three-panel TUI**: request list, prompt view, live streaming response
+- **Web UI** (React + Tailwind) with WebSocket for real-time viewing in the browser
+- **Send messages**: compose and send prompts from the TUI or web UI — spawns a `claude -p` subprocess that routes through the proxy automatically, zero configuration needed
+- **Continue conversations**: use `--continue` to reply in the last Claude Code conversation
+- **Conversation threading** with collapsible tool-loop grouping
 - Concurrent connection handling with tokio
 - Pre-built binaries for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and Windows (x86_64)
 
@@ -76,9 +79,28 @@ export NODE_EXTRA_CA_CERTS=/path/to/ca.crt
 
 4. Press Enter in the proxy terminal to launch the TUI and watch requests in real time.
 
+## Sending Messages
+
+You can compose and send messages directly from the TUI or web UI. Under the hood, this spawns a `claude -p --dangerously-skip-permissions` subprocess with `HTTPS_PROXY` set to route through the proxy. The request is intercepted like any other Claude Code traffic, and the response appears in real time.
+
+> **Warning:** New/Reply spawns a new Claude Code session (`claude -p`). This is a **separate subprocess** — it does NOT reuse your existing interactive Claude Code session. The `--continue` flag (Reply) continues the **last conversation of the spawned subprocess**, not necessarily the conversation you selected in the UI.
+
+### From the TUI
+
+- `n` — compose a new message (new Claude Code session)
+- `r` — reply (`--continue` — continues the last subprocess conversation)
+- Type your message, then `Ctrl+S` to send
+- `Esc` — cancel compose
+
+### From the Web UI
+
+1. Click **New** to compose a new message, or **Reply** to continue with `--continue`
+2. Type your message and press **Ctrl+Enter** (or click Send)
+3. The response streams in real time via the proxy — it appears in the request list like any other intercepted request
+
 ## Web UI
 
-To also launch the web interface alongside the TUI:
+To launch the web interface alongside the TUI:
 
 ```bash
 ./proxyclawd --web
@@ -91,6 +113,14 @@ To use a different port:
 ```bash
 ./proxyclawd --web --web-port 8000
 ```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/ws` | GET | WebSocket — real-time events |
+| `/api/requests` | GET | All intercepted requests |
+| `/api/send` | POST | Spawn a `claude -p` subprocess |
 
 ### Building the frontend
 
@@ -111,9 +141,16 @@ npm run dev
 
 ## TUI Controls
 
-- `Up/Down` or `k/j` — navigate request list
-- `Page Up/Page Down` — scroll response
-- `q` or `Esc` — quit
+| Key | Action |
+|-----|--------|
+| `Up/Down` or `k/j` | Navigate request list |
+| `Enter` | Toggle collapse on conversation/tool-loop |
+| `Page Up/Page Down` | Scroll response |
+| `n` | New message (compose mode) |
+| `r` | Reply (`--continue`) |
+| `Ctrl+S` | Send message (in compose mode) |
+| `Esc` | Cancel compose / quit |
+| `q` | Quit |
 
 ## Screenshots
 

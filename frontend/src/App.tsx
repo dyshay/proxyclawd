@@ -2,7 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import RequestList from "./components/RequestList";
 import PromptPanel from "./components/PromptPanel";
 import ResponsePanel from "./components/ResponsePanel";
+import ComposePanel from "./components/ComposePanel";
 import { useProxyWebSocket } from "./hooks/useWebSocket";
+
+interface ComposeMode {
+  continueConversation: boolean;
+}
 
 function App() {
   const { requests, connected } = useProxyWebSocket();
@@ -11,6 +16,7 @@ function App() {
   const [collapsedConvs, setCollapsedConvs] = useState<Set<string>>(
     () => new Set()
   );
+  const [composeMode, setComposeMode] = useState<ComposeMode | null>(null);
 
   useEffect(() => {
     if (autoFollow && requests.length > 0) {
@@ -41,6 +47,17 @@ function App() {
   const streamingCount = requests.filter((r) => r.status === "Streaming").length;
   const completeCount = requests.filter((r) => r.status === "Complete").length;
 
+  // Escape key to close compose
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && composeMode) {
+        setComposeMode(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [composeMode]);
+
   return (
     <div className="h-screen flex flex-col bg-surface-0">
       {/* Header */}
@@ -58,6 +75,29 @@ function App() {
         </div>
 
         <div className="flex items-center gap-5">
+          {/* Compose buttons */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setComposeMode({ continueConversation: false })}
+              className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase tracking-wider
+                bg-surface-3 text-text-secondary hover:bg-accent hover:text-surface-0
+                transition-colors cursor-pointer border border-border-dim hover:border-accent"
+            >
+              New
+            </button>
+            <button
+              onClick={() => setComposeMode({ continueConversation: true })}
+              className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase tracking-wider
+                bg-surface-3 text-text-secondary hover:bg-accent hover:text-surface-0
+                transition-colors cursor-pointer border border-border-dim hover:border-accent"
+            >
+              Reply
+            </button>
+          </div>
+
+          {/* Divider */}
+          <div className="w-px h-4 bg-border-dim" />
+
           {/* Stats bar */}
           <div className="flex items-center gap-4 text-[10px] font-mono uppercase tracking-wider">
             <span className="text-text-tertiary">
@@ -135,12 +175,25 @@ function App() {
 
         {/* Content area */}
         <div className="flex-1 flex flex-col min-h-0">
-          <div className="h-1/2 border-b border-border-dim min-h-0">
-            <PromptPanel request={selectedRequest} />
-          </div>
-          <div className="h-1/2 min-h-0">
-            <ResponsePanel request={selectedRequest} />
-          </div>
+          {composeMode ? (
+            <ComposePanel
+              continueConversation={composeMode.continueConversation}
+              onClose={() => setComposeMode(null)}
+              onSent={() => {
+                setComposeMode(null);
+                setAutoFollow(true);
+              }}
+            />
+          ) : (
+            <>
+              <div className="h-1/2 border-b border-border-dim min-h-0">
+                <PromptPanel request={selectedRequest} />
+              </div>
+              <div className="h-1/2 min-h-0">
+                <ResponsePanel request={selectedRequest} />
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -148,7 +201,7 @@ function App() {
       <footer className="flex items-center justify-between px-5 h-6 border-t border-border-dim bg-surface-1 shrink-0">
         <span className="text-[9px] font-mono text-text-ghost uppercase tracking-widest">
           {selectedRequest
-            ? `#${selectedRequest.id} / ${selectedRequest.model} / ${selectedRequest.message_count} messages`
+            ? `#${selectedRequest.id} / ${selectedRequest.model} / ${selectedRequest.message_count} messages${selectedRequest.is_user_initiated ? " / USER" : ""}`
             : "No selection"}
         </span>
         <span className="text-[9px] font-mono text-text-ghost uppercase tracking-widest">

@@ -1,5 +1,5 @@
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -20,11 +20,19 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::sse::{SseEvent, SseParser};
 use crate::state::{
     detect_tool_loop, extract_conversation_id, extract_message_count, extract_model,
-    extract_prompt, extract_system, ProxyEvent,
+    extract_prompt, extract_system, next_request_id, CapturedApiKey, CapturedHeaders, ProxyEvent,
 };
 use crate::tls::CertAuthority;
 
-static REQUEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// Headers to skip when capturing from proxied traffic (we reconstruct these ourselves)
+const SKIP_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "content-type",
+    "accept-encoding",
+    "connection",
+    "user-agent",
+];
 
 fn empty_body() -> BoxBody<Bytes, hyper::Error> {
     Empty::<Bytes>::new()
@@ -42,6 +50,8 @@ pub async fn run_proxy(
     listen_addr: SocketAddr,
     ca: Arc<CertAuthority>,
     event_tx: broadcast::Sender<ProxyEvent>,
+    api_key_store: CapturedApiKey,
+    captured_headers: CapturedHeaders,
 ) -> Result<()> {
     let listener = TcpListener::bind(listen_addr).await?;
     tracing::info!("Proxy listening on {}", listen_addr);
@@ -50,9 +60,11 @@ pub async fn run_proxy(
         let (stream, addr) = listener.accept().await?;
         let ca = ca.clone();
         let event_tx = event_tx.clone();
+        let api_key_store = api_key_store.clone();
+        let captured_headers = captured_headers.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, addr, ca, event_tx).await {
+            if let Err(e) = handle_connection(stream, addr, ca, event_tx, api_key_store, captured_headers).await {
                 tracing::error!("Connection error from {}: {:#}", addr, e);
             }
         });
@@ -64,6 +76,8 @@ async fn handle_connection(
     addr: SocketAddr,
     ca: Arc<CertAuthority>,
     event_tx: broadcast::Sender<ProxyEvent>,
+    api_key_store: CapturedApiKey,
+    captured_headers: CapturedHeaders,
 ) -> Result<()> {
     let ca = ca.clone();
     let event_tx = event_tx.clone();
@@ -71,9 +85,11 @@ async fn handle_connection(
     let service = service_fn(move |req: Request<Incoming>| {
         let ca = ca.clone();
         let event_tx = event_tx.clone();
+        let api_key_store = api_key_store.clone();
+        let captured_headers = captured_headers.clone();
         async move {
             if req.method() == Method::CONNECT {
-                handle_connect(req, ca, event_tx).await
+                handle_connect(req, ca, event_tx, api_key_store, captured_headers).await
             } else {
                 Ok(Response::new(empty_body()))
             }
@@ -95,6 +111,8 @@ async fn handle_connect(
     req: Request<Incoming>,
     ca: Arc<CertAuthority>,
     event_tx: broadcast::Sender<ProxyEvent>,
+    api_key_store: CapturedApiKey,
+    captured_headers: CapturedHeaders,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let host = req
         .uri()
@@ -112,7 +130,7 @@ async fn handle_connect(
     tokio::spawn(async move {
         match hyper::upgrade::on(req).await {
             Ok(upgraded) => {
-                if let Err(e) = mitm_tunnel(upgraded, domain, ca, event_tx).await {
+                if let Err(e) = mitm_tunnel(upgraded, domain, ca, event_tx, api_key_store, captured_headers).await {
                     tracing::error!("MITM tunnel error: {:#}", e);
                 }
             }
@@ -130,6 +148,8 @@ async fn mitm_tunnel(
     domain: String,
     ca: Arc<CertAuthority>,
     event_tx: broadcast::Sender<ProxyEvent>,
+    api_key_store: CapturedApiKey,
+    captured_headers: CapturedHeaders,
 ) -> Result<()> {
     let server_config = ca.server_config_for_domain(&domain).await?;
     let tls_acceptor = tokio_rustls::TlsAcceptor::from(server_config);
@@ -142,7 +162,9 @@ async fn mitm_tunnel(
     let service = service_fn(move |req: Request<Incoming>| {
         let domain = domain.clone();
         let event_tx = event_tx.clone();
-        async move { forward_and_intercept(req, &domain, event_tx).await }
+        let api_key_store = api_key_store.clone();
+        let captured_headers = captured_headers.clone();
+        async move { forward_and_intercept(req, &domain, event_tx, api_key_store, captured_headers).await }
     });
 
     http1::Builder::new()
@@ -158,8 +180,10 @@ async fn forward_and_intercept(
     req: Request<Incoming>,
     domain: &str,
     event_tx: broadcast::Sender<ProxyEvent>,
+    api_key_store: CapturedApiKey,
+    captured_headers: CapturedHeaders,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
-    match forward_and_intercept_inner(req, domain, event_tx).await {
+    match forward_and_intercept_inner(req, domain, event_tx, api_key_store, captured_headers).await {
         Ok(resp) => Ok(resp),
         Err(e) => {
             tracing::error!("Forward error: {:#}", e);
@@ -176,6 +200,8 @@ async fn forward_and_intercept_inner(
     req: Request<Incoming>,
     domain: &str,
     event_tx: broadcast::Sender<ProxyEvent>,
+    api_key_store: CapturedApiKey,
+    captured_headers: CapturedHeaders,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
     let (parts, body) = req.into_parts();
     let body_bytes = body
@@ -184,7 +210,7 @@ async fn forward_and_intercept_inner(
         .map_err(|e| anyhow::anyhow!("Failed to read request body: {}", e))?
         .to_bytes();
 
-    let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let request_id = next_request_id();
     let path = parts.uri.path().to_string();
     let method = parts.method.to_string();
 
@@ -198,6 +224,48 @@ async fn forward_and_intercept_inner(
             let conversation_id = extract_conversation_id(&body_json);
             let message_count = extract_message_count(&body_json);
             let is_tool_loop = detect_tool_loop(&body_json);
+            let raw_messages = body_json.get("messages").cloned();
+
+            // Capture API key and headers from proxied traffic
+            let skip: HashSet<&str> = SKIP_HEADERS.iter().copied().collect();
+            let mut hdrs = Vec::new();
+            let mut found_api_key = false;
+            for (name, value) in &parts.headers {
+                let name_lower = name.as_str().to_lowercase();
+                if skip.contains(name_lower.as_str()) {
+                    continue;
+                }
+                if let Ok(v) = value.to_str() {
+                    // Capture API key from x-api-key or Authorization: Bearer
+                    if name_lower == "x-api-key" {
+                        let mut store = api_key_store.lock().unwrap();
+                        *store = Some(v.to_string());
+                        found_api_key = true;
+                        tracing::info!("Captured API key from x-api-key header");
+                    } else if name_lower == "authorization" {
+                        if let Some(token) = v.strip_prefix("Bearer ") {
+                            let mut store = api_key_store.lock().unwrap();
+                            if store.is_none() {
+                                *store = Some(token.to_string());
+                                found_api_key = true;
+                                tracing::info!("Captured API key from Authorization Bearer header");
+                            }
+                        }
+                    }
+                    hdrs.push((name_lower, v.to_string()));
+                }
+            }
+            if !found_api_key {
+                tracing::warn!(
+                    "No API key found in headers for {} {}. Headers present: {:?}",
+                    method, path,
+                    parts.headers.keys().map(|k| k.as_str()).collect::<Vec<_>>()
+                );
+            }
+            if !hdrs.is_empty() {
+                let mut store = captured_headers.lock().unwrap();
+                *store = hdrs;
+            }
 
             let _ = event_tx.send(ProxyEvent::NewRequest {
                 id: request_id,
@@ -210,6 +278,8 @@ async fn forward_and_intercept_inner(
                 conversation_id,
                 message_count,
                 is_tool_loop,
+                is_user_initiated: false,
+                raw_messages,
             });
         }
     }
@@ -277,7 +347,7 @@ async fn forward_and_intercept_inner(
     }
 }
 
-async fn connect_upstream(
+pub(crate) async fn connect_upstream(
     domain: &str,
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
     let mut root_store = rustls::RootCertStore::empty();

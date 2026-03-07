@@ -11,6 +11,7 @@ export interface InterceptedRequest {
   conversation_id: string;
   message_count: number;
   is_tool_loop: boolean;
+  is_user_initiated: boolean;
 }
 
 export type RequestStatus =
@@ -32,6 +33,7 @@ export type ProxyEvent =
         conversation_id: string;
         message_count: number;
         is_tool_loop: boolean;
+        is_user_initiated: boolean;
       };
     }
   | { ResponseDelta: { id: number; text: string } }

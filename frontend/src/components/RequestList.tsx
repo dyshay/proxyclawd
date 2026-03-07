@@ -287,6 +287,11 @@ export default function RequestList({
                 )}
               </div>
               <div className="mt-0.5 flex items-center gap-1.5" style={{ marginLeft: "6px" }}>
+                {req.is_user_initiated && (
+                  <span className="text-[9px] font-mono text-cyan-400 border border-cyan-400/30 px-1 uppercase font-bold">
+                    user
+                  </span>
+                )}
                 <span
                   className={`text-[11px] font-mono truncate ${
                     isSelected ? "text-text-primary" : "text-text-secondary"

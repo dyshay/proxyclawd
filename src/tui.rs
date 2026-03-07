@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -16,6 +16,16 @@ use ratatui::Terminal;
 use tokio::sync::broadcast;
 
 use crate::state::{AppState, ProxyEvent, RequestStatus};
+
+#[allow(dead_code)]
+enum Mode {
+    Browse,
+    Compose {
+        input: String,
+        cursor: usize,
+        continue_conversation: bool,
+    },
+}
 
 /// A row in the display list, mapping to either a conversation header,
 /// a normal child request, a tool-loop group header, or a tool-loop child.
@@ -145,7 +155,10 @@ fn build_display_rows(state: &AppState) -> Vec<DisplayRow> {
     rows
 }
 
-pub async fn run_tui(mut event_rx: broadcast::Receiver<ProxyEvent>) -> anyhow::Result<()> {
+pub async fn run_tui(
+    mut event_rx: broadcast::Receiver<ProxyEvent>,
+    ca_cert_path: String,
+) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -162,6 +175,7 @@ pub async fn run_tui(mut event_rx: broadcast::Receiver<ProxyEvent>) -> anyhow::R
         &mut list_state,
         &mut display_row_index,
         &mut event_rx,
+        &ca_cert_path,
     )
     .await;
 
@@ -179,7 +193,10 @@ async fn run_tui_loop(
     list_state: &mut ListState,
     display_row_index: &mut usize,
     event_rx: &mut broadcast::Receiver<ProxyEvent>,
+    ca_cert_path: &str,
 ) -> anyhow::Result<()> {
+    let mut mode = Mode::Browse;
+
     loop {
         let rows = build_display_rows(state);
 
@@ -197,54 +214,133 @@ async fn run_tui_loop(
         }
 
         let rows_for_draw = rows.clone();
-        terminal.draw(|f| draw_ui(f, state, list_state, &rows_for_draw))?;
+        let is_compose = matches!(mode, Mode::Compose { .. });
+        terminal.draw(|f| {
+            if is_compose {
+                draw_compose_ui(f, state, list_state, &rows_for_draw, &mode);
+            } else {
+                draw_ui(f, state, list_state, &rows_for_draw);
+            }
+        })?;
 
         // Poll for keyboard events with a short timeout
         if crossterm::event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if *display_row_index > 0 {
-                                *display_row_index -= 1;
+                    match &mut mode {
+                        Mode::Browse => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if *display_row_index > 0 {
+                                    *display_row_index -= 1;
+                                }
+                                state.auto_select_latest = false;
+                                state.response_scroll = 0;
+                                state.prompt_scroll = 0;
                             }
-                            state.auto_select_latest = false;
-                            state.response_scroll = 0;
-                            state.prompt_scroll = 0;
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if !rows.is_empty()
-                                && *display_row_index < rows.len().saturating_sub(1)
-                            {
-                                *display_row_index += 1;
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if !rows.is_empty()
+                                    && *display_row_index < rows.len().saturating_sub(1)
+                                {
+                                    *display_row_index += 1;
+                                }
+                                state.auto_select_latest =
+                                    *display_row_index == rows.len().saturating_sub(1);
+                                state.response_scroll = 0;
+                                state.prompt_scroll = 0;
                             }
-                            state.auto_select_latest =
-                                *display_row_index == rows.len().saturating_sub(1);
-                            state.response_scroll = 0;
-                            state.prompt_scroll = 0;
-                        }
-                        KeyCode::Enter => {
-                            // Toggle collapse on the selected row
-                            if let Some(row) = rows.get(*display_row_index) {
-                                if row.is_conv_header {
-                                    let cid = row.conversation_id.clone();
-                                    if !state.collapsed_conversations.remove(&cid) {
-                                        state.collapsed_conversations.insert(cid);
-                                    }
-                                } else if let Some(ref tl_key) = row.tool_loop_key {
-                                    if row.tool_loop_count.is_some() {
-                                        let key = tl_key.clone();
-                                        if !state.collapsed_conversations.remove(&key) {
-                                            state.collapsed_conversations.insert(key);
+                            KeyCode::Enter => {
+                                if let Some(row) = rows.get(*display_row_index) {
+                                    if row.is_conv_header {
+                                        let cid = row.conversation_id.clone();
+                                        if !state.collapsed_conversations.remove(&cid) {
+                                            state.collapsed_conversations.insert(cid);
+                                        }
+                                    } else if let Some(ref tl_key) = row.tool_loop_key {
+                                        if row.tool_loop_count.is_some() {
+                                            let key = tl_key.clone();
+                                            if !state.collapsed_conversations.remove(&key) {
+                                                state.collapsed_conversations.insert(key);
+                                            }
                                         }
                                     }
                                 }
                             }
+                            KeyCode::PageDown => state.scroll_response_down(10),
+                            KeyCode::PageUp => state.scroll_response_up(10),
+                            KeyCode::Char('n') => {
+                                // New message (no --continue)
+                                mode = Mode::Compose {
+                                    input: String::new(),
+                                    cursor: 0,
+                                    continue_conversation: false,
+                                };
+                            }
+                            KeyCode::Char('r') => {
+                                // Reply (--continue)
+                                mode = Mode::Compose {
+                                    input: String::new(),
+                                    cursor: 0,
+                                    continue_conversation: true,
+                                };
+                            }
+                            _ => {}
+                        },
+                        Mode::Compose {
+                            input,
+                            cursor,
+                            continue_conversation,
+                        } => {
+                            if key.modifiers.contains(KeyModifiers::CONTROL)
+                                && key.code == KeyCode::Char('s')
+                            {
+                                // Send message via claude subprocess
+                                if !input.trim().is_empty() {
+                                    let msg = input.clone();
+                                    let cont = *continue_conversation;
+                                    let cert = ca_cert_path.to_string();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = crate::claude_subprocess::spawn_claude_message(&msg, cont, &cert).await {
+                                            tracing::error!("claude subprocess failed: {:#}", e);
+                                        }
+                                    });
+
+                                    mode = Mode::Browse;
+                                    state.auto_select_latest = true;
+                                }
+                            } else {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        mode = Mode::Browse;
+                                    }
+                                    KeyCode::Char(c) => {
+                                        input.insert(*cursor, c);
+                                        *cursor += 1;
+                                    }
+                                    KeyCode::Backspace => {
+                                        if *cursor > 0 {
+                                            *cursor -= 1;
+                                            input.remove(*cursor);
+                                        }
+                                    }
+                                    KeyCode::Left => {
+                                        if *cursor > 0 {
+                                            *cursor -= 1;
+                                        }
+                                    }
+                                    KeyCode::Right => {
+                                        if *cursor < input.len() {
+                                            *cursor += 1;
+                                        }
+                                    }
+                                    KeyCode::Enter => {
+                                        input.insert(*cursor, '\n');
+                                        *cursor += 1;
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
-                        KeyCode::PageDown => state.scroll_response_down(10),
-                        KeyCode::PageUp => state.scroll_response_up(10),
-                        _ => {}
                     }
                 }
             }
@@ -286,6 +382,80 @@ fn draw_ui(
     draw_request_list(f, state, list_state, rows, chunks[0]);
     draw_prompt_panel(f, state, chunks[1]);
     draw_response_panel(f, state, chunks[2]);
+}
+
+fn draw_compose_ui(
+    f: &mut ratatui::Frame,
+    state: &AppState,
+    list_state: &mut ListState,
+    rows: &[DisplayRow],
+    mode: &Mode,
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Percentage(60),
+        ])
+        .split(f.area());
+
+    draw_request_list(f, state, list_state, rows, chunks[0]);
+
+    if let Mode::Compose {
+        input,
+        continue_conversation,
+        ..
+    } = mode
+    {
+        let context_line = if *continue_conversation {
+            "Reply (--continue)".to_string()
+        } else {
+            "New message".to_string()
+        };
+
+        let header = Line::from(vec![
+            Span::styled(
+                " COMPOSE ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(context_line, Style::default().fg(Color::DarkGray)),
+        ]);
+
+        let help = Line::from(vec![
+            Span::styled(
+                " Ctrl+S: Send ",
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(" Esc: Cancel ", Style::default().fg(Color::DarkGray)),
+        ]);
+
+        let content = if input.is_empty() {
+            "Type your message...".to_string()
+        } else {
+            input.clone()
+        };
+
+        let paragraph = Paragraph::new(content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(header)
+                    .title_bottom(help)
+                    .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            )
+            .style(if input.is_empty() {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::White)
+            })
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(paragraph, chunks[1]);
+    }
 }
 
 fn draw_request_list(
@@ -412,30 +582,41 @@ fn draw_request_list(
 
             let msg_count_label = format!(" [{}msg]", req.message_count);
 
-            let line = Line::from(vec![
+            // Build spans with [USER] badge for user-initiated requests
+            let mut spans = vec![
                 Span::raw(indent_str.to_string()),
                 Span::styled(format!("[{status_icon}] "), style),
                 Span::styled(
                     format!("[{timestamp}] "),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::styled(
-                    model_short.to_string(),
-                    Style::default().fg(Color::Magenta),
-                ),
-                Span::styled(msg_count_label, Style::default().fg(Color::DarkGray)),
-                Span::styled(status_text, style),
-            ]);
+            ];
 
+            if req.is_user_initiated {
+                spans.push(Span::styled(
+                    "[USER] ",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ));
+            }
+
+            spans.push(Span::styled(
+                model_short.to_string(),
+                Style::default().fg(Color::Magenta),
+            ));
+            spans.push(Span::styled(msg_count_label, Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(status_text, style));
+
+            let line = Line::from(spans);
             ListItem::new(line)
         })
         .collect();
 
+    let title = " Requests (n: new, r: reply) ";
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Requests ")
+                .title(title)
                 .title_style(
                     Style::default()
                         .fg(Color::White)

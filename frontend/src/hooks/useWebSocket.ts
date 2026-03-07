@@ -12,6 +12,7 @@ function normalize(req: InterceptedRequest): InterceptedRequest {
     conversation_id: req.conversation_id ?? `solo-${req.id}`,
     message_count: req.message_count ?? 0,
     is_tool_loop: req.is_tool_loop ?? false,
+    is_user_initiated: req.is_user_initiated ?? false,
   };
 }
 
@@ -36,6 +37,7 @@ function applyEvent(
         conversation_id: e.conversation_id ?? `solo-${e.id}`,
         message_count: e.message_count ?? 0,
         is_tool_loop: e.is_tool_loop ?? false,
+        is_user_initiated: e.is_user_initiated ?? false,
       },
     ];
   }

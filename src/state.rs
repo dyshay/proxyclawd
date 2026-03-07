@@ -1,9 +1,20 @@
 use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
+
+static REQUEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+pub fn next_request_id() -> usize {
+    REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+pub type CapturedApiKey = Arc<Mutex<Option<String>>>;
+pub type CapturedHeaders = Arc<Mutex<Vec<(String, String)>>>;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InterceptedRequest {
@@ -19,6 +30,9 @@ pub struct InterceptedRequest {
     pub conversation_id: String,
     pub message_count: usize,
     pub is_tool_loop: bool,
+    pub is_user_initiated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_messages: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -42,6 +56,8 @@ pub enum ProxyEvent {
         conversation_id: String,
         message_count: usize,
         is_tool_loop: bool,
+        is_user_initiated: bool,
+        raw_messages: Option<Value>,
     },
     ResponseDelta {
         id: usize,
@@ -90,6 +106,8 @@ impl AppState {
                 conversation_id,
                 message_count,
                 is_tool_loop,
+                is_user_initiated,
+                raw_messages,
             } => {
                 self.requests.push(InterceptedRequest {
                     id,
@@ -104,6 +122,8 @@ impl AppState {
                     conversation_id,
                     message_count,
                     is_tool_loop,
+                    is_user_initiated,
+                    raw_messages,
                 });
                 if self.auto_select_latest {
                     self.selected_index = self.requests.len().saturating_sub(1);
