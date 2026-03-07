@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
@@ -13,6 +16,9 @@ pub struct InterceptedRequest {
     pub prompt_text: String,
     pub response_text: String,
     pub status: RequestStatus,
+    pub conversation_id: String,
+    pub message_count: usize,
+    pub is_tool_loop: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -33,6 +39,9 @@ pub enum ProxyEvent {
         model: String,
         system_prompt: Option<String>,
         prompt_text: String,
+        conversation_id: String,
+        message_count: usize,
+        is_tool_loop: bool,
     },
     ResponseDelta {
         id: usize,
@@ -53,6 +62,7 @@ pub struct AppState {
     pub auto_select_latest: bool,
     pub response_scroll: u16,
     pub prompt_scroll: u16,
+    pub collapsed_conversations: HashSet<String>,
 }
 
 impl AppState {
@@ -63,6 +73,7 @@ impl AppState {
             auto_select_latest: true,
             response_scroll: 0,
             prompt_scroll: 0,
+            collapsed_conversations: HashSet::new(),
         }
     }
 
@@ -76,6 +87,9 @@ impl AppState {
                 model,
                 system_prompt,
                 prompt_text,
+                conversation_id,
+                message_count,
+                is_tool_loop,
             } => {
                 self.requests.push(InterceptedRequest {
                     id,
@@ -87,6 +101,9 @@ impl AppState {
                     prompt_text,
                     response_text: String::new(),
                     status: RequestStatus::Pending,
+                    conversation_id,
+                    message_count,
+                    is_tool_loop,
                 });
                 if self.auto_select_latest {
                     self.selected_index = self.requests.len().saturating_sub(1);
@@ -116,22 +133,6 @@ impl AppState {
                 }
             }
         }
-    }
-
-    pub fn select_next(&mut self) {
-        if !self.requests.is_empty() {
-            self.selected_index = (self.selected_index + 1).min(self.requests.len() - 1);
-            self.auto_select_latest = self.selected_index == self.requests.len() - 1;
-            self.response_scroll = 0;
-            self.prompt_scroll = 0;
-        }
-    }
-
-    pub fn select_previous(&mut self) {
-        self.selected_index = self.selected_index.saturating_sub(1);
-        self.auto_select_latest = false;
-        self.response_scroll = 0;
-        self.prompt_scroll = 0;
     }
 
     pub fn selected_request(&self) -> Option<&InterceptedRequest> {
@@ -190,6 +191,62 @@ pub fn extract_model(body: &Value) -> String {
         .and_then(|m| m.as_str())
         .unwrap_or("unknown")
         .to_string()
+}
+
+/// Hash the first message in the messages array to produce a stable conversation ID.
+pub fn extract_conversation_id(body: &Value) -> String {
+    if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
+        if let Some(first) = messages.first() {
+            let repr = first.to_string();
+            let mut hasher = DefaultHasher::new();
+            repr.hash(&mut hasher);
+            return format!("{:016x}", hasher.finish());
+        }
+    }
+    "0000000000000000".to_string()
+}
+
+/// Return the number of messages in the request.
+pub fn extract_message_count(body: &Value) -> usize {
+    body.get("messages")
+        .and_then(|m| m.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0)
+}
+
+/// Detect if the last two messages form a tool-use loop (assistant tool_use + user tool_result).
+pub fn detect_tool_loop(body: &Value) -> bool {
+    if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
+        if messages.len() >= 2 {
+            let second_last = &messages[messages.len() - 2];
+            let last = &messages[messages.len() - 1];
+
+            let is_assistant_tool_use = second_last
+                .get("role")
+                .and_then(|r| r.as_str())
+                == Some("assistant")
+                && has_content_type(second_last, "tool_use");
+
+            let is_user_tool_result = last
+                .get("role")
+                .and_then(|r| r.as_str())
+                == Some("user")
+                && has_content_type(last, "tool_result");
+
+            return is_assistant_tool_use && is_user_tool_result;
+        }
+    }
+    false
+}
+
+fn has_content_type(msg: &Value, content_type: &str) -> bool {
+    if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
+        content.iter().any(|block| {
+            block.get("type").and_then(|t| t.as_str()) == Some(content_type)
+        })
+    } else {
+        false
+    }
 }
 
 fn extract_content(msg: &Value) -> String {

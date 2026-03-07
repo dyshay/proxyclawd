@@ -1,1 +1,129 @@
 @import "tailwindcss";
+
+@theme {
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: "Manrope", system-ui, sans-serif;
+
+  --color-surface-0: #06060a;
+  --color-surface-1: #0c0c10;
+  --color-surface-2: #131318;
+  --color-surface-3: #1a1a21;
+  --color-surface-4: #22222b;
+
+  --color-border-dim: #1e1e27;
+  --color-border: #2a2a35;
+  --color-border-bright: #3a3a48;
+
+  --color-text-primary: #eeeef0;
+  --color-text-secondary: #9898a8;
+  --color-text-tertiary: #5c5c6e;
+  --color-text-ghost: #3a3a48;
+
+  --color-accent: #f97316;
+  --color-accent-dim: #c2410c;
+  --color-accent-glow: rgba(249, 115, 22, 0.15);
+  --color-accent-ghost: rgba(249, 115, 22, 0.06);
+
+  --color-status-streaming: #fbbf24;
+  --color-status-complete: #34d399;
+  --color-status-error: #f87171;
+  --color-status-pending: #5c5c6e;
+}
+
+/* Base */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--color-surface-0);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Noise texture overlay */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 256px 256px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-bright);
+}
+
+/* Selection */
+::selection {
+  background: var(--color-accent);
+  color: var(--color-surface-0);
+}
+
+/* Streaming pulse animation */
+@keyframes signal-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes scan-line {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-signal {
+  animation: signal-pulse 1.5s ease-in-out infinite;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out both;
+}
+
+/* Tree connector lines */
+.tree-line {
+  position: relative;
+}
+.tree-line::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-border-dim);
+}
+.tree-line-last::before {
+  bottom: 50%;
+}
+.tree-dot {
+  position: relative;
+}
+.tree-dot::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 5px;
+  height: 1px;
+  background: var(--color-border-dim);
+}

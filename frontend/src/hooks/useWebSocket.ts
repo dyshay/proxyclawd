@@ -5,6 +5,16 @@ import type {
   WsMessage,
 } from "../types";
 
+/** Ensure new fields have defaults for requests from older backends or snapshots */
+function normalize(req: InterceptedRequest): InterceptedRequest {
+  return {
+    ...req,
+    conversation_id: req.conversation_id ?? `solo-${req.id}`,
+    message_count: req.message_count ?? 0,
+    is_tool_loop: req.is_tool_loop ?? false,
+  };
+}
+
 function applyEvent(
   requests: InterceptedRequest[],
   event: ProxyEvent
@@ -23,6 +33,9 @@ function applyEvent(
         prompt_text: e.prompt_text,
         response_text: "",
         status: "Pending",
+        conversation_id: e.conversation_id ?? `solo-${e.id}`,
+        message_count: e.message_count ?? 0,
+        is_tool_loop: e.is_tool_loop ?? false,
       },
     ];
   }
@@ -70,7 +83,7 @@ export function useProxyWebSocket() {
     ws.onmessage = (evt) => {
       const msg: WsMessage = JSON.parse(evt.data);
       if (msg.type === "snapshot") {
-        setRequests(msg.requests);
+        setRequests(msg.requests.map(normalize));
       } else if (msg.type === "event") {
         setRequests((prev) => applyEvent(prev, msg.event));
       }

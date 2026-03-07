@@ -18,7 +18,10 @@ use tokio_rustls::TlsConnector;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::sse::{SseEvent, SseParser};
-use crate::state::{extract_model, extract_prompt, extract_system, ProxyEvent};
+use crate::state::{
+    detect_tool_loop, extract_conversation_id, extract_message_count, extract_model,
+    extract_prompt, extract_system, ProxyEvent,
+};
 use crate::tls::CertAuthority;
 
 static REQUEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -192,6 +195,9 @@ async fn forward_and_intercept_inner(
             let model = extract_model(&body_json);
             let prompt_text = extract_prompt(&body_json);
             let system_prompt = extract_system(&body_json);
+            let conversation_id = extract_conversation_id(&body_json);
+            let message_count = extract_message_count(&body_json);
+            let is_tool_loop = detect_tool_loop(&body_json);
 
             let _ = event_tx.send(ProxyEvent::NewRequest {
                 id: request_id,
@@ -201,6 +207,9 @@ async fn forward_and_intercept_inner(
                 model,
                 system_prompt,
                 prompt_text,
+                conversation_id,
+                message_count,
+                is_tool_loop,
             });
         }
     }
