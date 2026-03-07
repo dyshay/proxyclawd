@@ -1,12 +1,13 @@
 # ProxyClawd
 
-MITM proxy that intercepts traffic between Claude Code CLI and `api.anthropic.com`, displaying prompts and streamed responses in a real-time terminal UI.
+MITM proxy that intercepts traffic between Claude Code CLI and `api.anthropic.com`, displaying prompts and streamed responses in a real-time terminal UI or web interface.
 
 ## Features
 
 - HTTPS MITM via CONNECT tunnel with runtime TLS certificate generation
 - SSE stream parsing with zero-latency forwarding
 - Three-panel TUI: request list, prompt view, live streaming response
+- Web UI (React + Tailwind) with WebSocket for real-time viewing in the browser
 - Concurrent connection handling with tokio
 - Pre-built binaries for Linux (x86_64, aarch64), macOS (x86_64, aarch64), and Windows (x86_64)
 
@@ -75,13 +76,46 @@ export NODE_EXTRA_CA_CERTS=/path/to/ca.crt
 
 4. Press Enter in the proxy terminal to launch the TUI and watch requests in real time.
 
+## Web UI
+
+To also launch the web interface alongside the TUI:
+
+```bash
+./proxyclawd --web
+```
+
+Then open http://localhost:3000 in your browser. The web UI shows the same data as the TUI in real time via WebSocket.
+
+To use a different port:
+
+```bash
+./proxyclawd --web --web-port 8000
+```
+
+### Building the frontend
+
+The web UI is served from `frontend/dist/`. To rebuild it:
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+For development with hot reload (proxies API/WS to the Rust server on port 3000):
+
+```bash
+cd frontend
+npm run dev
+```
+
 ## TUI Controls
 
-- `Tab` — switch between panels
-- `Up/Down` — navigate request list
-- `q` — quit
+- `Up/Down` or `k/j` — navigate request list
+- `Page Up/Page Down` — scroll response
+- `q` or `Esc` — quit
 
-## Screenshots 
+## Screenshots
 
 <img width="1907" height="1025" alt="image" src="https://github.com/user-attachments/assets/637f19ed-9f6b-4c4e-9fd0-a88c0484c696" />
 
@@ -92,4 +126,4 @@ Releases are automatic. Bump the version in `Cargo.toml` and push — a GitHub R
 
 ## Stack
 
-Rust, tokio, hyper, rustls, rcgen, ratatui, crossterm
+Rust, tokio, hyper, rustls, rcgen, ratatui, crossterm, axum, clap | React, TypeScript, Tailwind CSS, Vite
