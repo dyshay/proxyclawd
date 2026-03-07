@@ -161,13 +161,12 @@ fn draw_request_list(
 fn draw_prompt_panel(f: &mut ratatui::Frame, state: &AppState, area: ratatui::layout::Rect) {
     let content = if let Some(req) = state.selected_request() {
         let mut text = String::new();
-        if let Some(system) = &req.system_prompt {
-            text.push_str("── system ──\n");
-            text.push_str(&truncate(system, 2000));
-            text.push_str("\n\n");
-        }
         text.push_str("── user ──\n");
         text.push_str(&req.prompt_text);
+        if let Some(system) = &req.system_prompt {
+            text.push_str("\n\n── system ──\n");
+            text.push_str(system);
+        }
         text
     } else {
         "No request selected".to_string()
