@@ -224,6 +224,10 @@ async fn forward_and_intercept_inner(
         .version(parts.version);
 
     for (name, value) in &parts.headers {
+        // Strip Accept-Encoding so upstream sends uncompressed SSE we can parse
+        if name.as_str().eq_ignore_ascii_case("accept-encoding") {
+            continue;
+        }
         upstream_req_builder = upstream_req_builder.header(name, value);
     }
 
@@ -237,12 +241,18 @@ async fn forward_and_intercept_inner(
         .map_err(|e| anyhow::anyhow!("Upstream request failed: {}", e))?;
 
     // Check if this is an SSE response
-    let is_sse = upstream_res
+    let content_type = upstream_res
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.contains("text/event-stream"))
-        .unwrap_or(false);
+        .unwrap_or("none")
+        .to_string();
+    let is_sse = content_type.contains("text/event-stream");
+
+    tracing::info!(
+        "Response for {} {} — content-type: {}, is_sse: {}, is_messages_api: {}",
+        method, path, content_type, is_sse, is_messages_api
+    );
 
     if is_sse && is_messages_api {
         tee_sse_response(upstream_res, request_id, event_tx).await
@@ -291,12 +301,18 @@ async fn tee_sse_response(
 
     tokio::spawn(async move {
         let mut parser = SseParser::new();
+        tracing::info!("SSE tee started for req {}", request_id);
 
         while let Some(frame_result) = body.frame().await {
             match frame_result {
                 Ok(frame) => {
                     if let Some(data) = frame.data_ref() {
+                        let preview = String::from_utf8_lossy(&data[..data.len().min(500)]);
+                        tracing::info!("SSE chunk for req {}: {} bytes — {:?}", request_id, data.len(), preview);
                         let events = parser.feed(data);
+                        for event in &events {
+                            tracing::info!("SSE event for req {}: {:?}", request_id, event);
+                        }
                         for event in events {
                             match event {
                                 SseEvent::ContentBlockDelta { text } => {

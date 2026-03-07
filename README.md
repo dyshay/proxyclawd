@@ -45,18 +45,32 @@ sudo update-ca-certificates
 export NODE_EXTRA_CA_CERTS=$(pwd)/ca.crt
 ```
 
-3. Run Claude Code through the proxy (in a separate terminal):
+3. Set the environment variables **in the terminal where you will run Claude Code** (not the proxy terminal):
 
-**Linux/macOS:**
+**Linux/macOS (session only):**
 ```bash
-HTTPS_PROXY=http://127.0.0.1:8080 NODE_EXTRA_CA_CERTS=$(pwd)/ca.crt claude
+export HTTPS_PROXY=http://127.0.0.1:8080
+export NODE_EXTRA_CA_CERTS=$(pwd)/ca.crt
+claude
 ```
 
-**Windows (PowerShell):**
+**Windows (PowerShell, session only):**
 ```powershell
 $env:HTTPS_PROXY = "http://127.0.0.1:8080"
 $env:NODE_EXTRA_CA_CERTS = "$pwd\ca.crt"
 claude
+```
+
+**To set them permanently (Windows):**
+```powershell
+[Environment]::SetEnvironmentVariable("HTTPS_PROXY", "http://127.0.0.1:8080", "User")
+[Environment]::SetEnvironmentVariable("NODE_EXTRA_CA_CERTS", "C:\path\to\ca.crt", "User")
+```
+
+**To set them permanently (Linux/macOS):** add to `~/.bashrc` or `~/.zshrc`:
+```bash
+export HTTPS_PROXY=http://127.0.0.1:8080
+export NODE_EXTRA_CA_CERTS=/path/to/ca.crt
 ```
 
 4. Press Enter in the proxy terminal to launch the TUI and watch requests in real time.
