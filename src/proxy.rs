@@ -13,7 +13,7 @@ use hyper::{Method, Request, Response};
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::broadcast;
 use tokio_rustls::TlsConnector;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -38,7 +38,7 @@ fn full_body(data: Bytes) -> BoxBody<Bytes, hyper::Error> {
 pub async fn run_proxy(
     listen_addr: SocketAddr,
     ca: Arc<CertAuthority>,
-    event_tx: UnboundedSender<ProxyEvent>,
+    event_tx: broadcast::Sender<ProxyEvent>,
 ) -> Result<()> {
     let listener = TcpListener::bind(listen_addr).await?;
     tracing::info!("Proxy listening on {}", listen_addr);
@@ -60,7 +60,7 @@ async fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
     ca: Arc<CertAuthority>,
-    event_tx: UnboundedSender<ProxyEvent>,
+    event_tx: broadcast::Sender<ProxyEvent>,
 ) -> Result<()> {
     let ca = ca.clone();
     let event_tx = event_tx.clone();
@@ -91,7 +91,7 @@ async fn handle_connection(
 async fn handle_connect(
     req: Request<Incoming>,
     ca: Arc<CertAuthority>,
-    event_tx: UnboundedSender<ProxyEvent>,
+    event_tx: broadcast::Sender<ProxyEvent>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let host = req
         .uri()
@@ -126,7 +126,7 @@ async fn mitm_tunnel(
     upgraded: hyper::upgrade::Upgraded,
     domain: String,
     ca: Arc<CertAuthority>,
-    event_tx: UnboundedSender<ProxyEvent>,
+    event_tx: broadcast::Sender<ProxyEvent>,
 ) -> Result<()> {
     let server_config = ca.server_config_for_domain(&domain).await?;
     let tls_acceptor = tokio_rustls::TlsAcceptor::from(server_config);
@@ -154,7 +154,7 @@ async fn mitm_tunnel(
 async fn forward_and_intercept(
     req: Request<Incoming>,
     domain: &str,
-    event_tx: UnboundedSender<ProxyEvent>,
+    event_tx: broadcast::Sender<ProxyEvent>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     match forward_and_intercept_inner(req, domain, event_tx).await {
         Ok(resp) => Ok(resp),
@@ -172,7 +172,7 @@ async fn forward_and_intercept(
 async fn forward_and_intercept_inner(
     req: Request<Incoming>,
     domain: &str,
-    event_tx: UnboundedSender<ProxyEvent>,
+    event_tx: broadcast::Sender<ProxyEvent>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
     let (parts, body) = req.into_parts();
     let body_bytes = body
@@ -293,7 +293,7 @@ async fn connect_upstream(
 async fn tee_sse_response(
     upstream_res: Response<Incoming>,
     request_id: usize,
-    event_tx: UnboundedSender<ProxyEvent>,
+    event_tx: broadcast::Sender<ProxyEvent>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
     let (parts, mut body) = upstream_res.into_parts();
 

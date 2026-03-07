@@ -12,11 +12,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Terminal;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::broadcast;
 
 use crate::state::{AppState, ProxyEvent, RequestStatus};
 
-pub async fn run_tui(mut event_rx: UnboundedReceiver<ProxyEvent>) -> anyhow::Result<()> {
+pub async fn run_tui(mut event_rx: broadcast::Receiver<ProxyEvent>) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -40,7 +40,7 @@ async fn run_tui_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
     list_state: &mut ListState,
-    event_rx: &mut UnboundedReceiver<ProxyEvent>,
+    event_rx: &mut broadcast::Receiver<ProxyEvent>,
 ) -> anyhow::Result<()> {
     loop {
         // Sync list_state with app state
@@ -67,8 +67,12 @@ async fn run_tui_loop(
         }
 
         // Drain all pending proxy events
-        while let Ok(proxy_event) = event_rx.try_recv() {
-            state.apply_event(proxy_event);
+        loop {
+            match event_rx.try_recv() {
+                Ok(proxy_event) => state.apply_event(proxy_event),
+                Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
         }
     }
 }

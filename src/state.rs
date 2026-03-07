@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct InterceptedRequest {
     pub id: usize,
     pub timestamp: DateTime<Utc>,
@@ -14,7 +15,7 @@ pub struct InterceptedRequest {
     pub status: RequestStatus,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum RequestStatus {
     Pending,
     Streaming,
@@ -22,7 +23,7 @@ pub enum RequestStatus {
     Error(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize)]
 pub enum ProxyEvent {
     NewRequest {
         id: usize,
