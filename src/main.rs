@@ -110,15 +110,20 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Spawn web server if --web flag is set
+    // Spawn web server if --web flag is set, wait for it to bind before starting TUI
     let web_handle = if cli.web {
         let web_tx = event_tx.clone();
         let port = cli.web_port;
-        Some(tokio::spawn(async move {
-            if let Err(e) = web::run_web_server(port, web_tx).await {
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            if let Err(e) = web::run_web_server(port, web_tx, ready_tx).await {
                 tracing::error!("Web server error: {:#}", e);
+                eprintln!("Web server error: {:#}", e);
             }
-        }))
+        });
+        // Wait for web server to be ready (or fail)
+        let _ = ready_rx.await;
+        Some(handle)
     } else {
         None
     };

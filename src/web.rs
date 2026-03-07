@@ -5,7 +5,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, oneshot, Mutex};
 use tower_http::services::ServeDir;
 
 use crate::state::{AppState, InterceptedRequest, ProxyEvent};
@@ -18,6 +18,7 @@ struct WebState {
 pub async fn run_web_server(
     port: u16,
     event_tx: broadcast::Sender<ProxyEvent>,
+    ready_tx: oneshot::Sender<()>,
 ) -> anyhow::Result<()> {
     let mut event_rx = event_tx.subscribe();
 
@@ -50,6 +51,14 @@ pub async fn run_web_server(
         .join("frontend")
         .join("dist");
 
+    if !frontend_dir.join("index.html").exists() {
+        eprintln!(
+            "  Warning: frontend not built (expected {})",
+            frontend_dir.display()
+        );
+        eprintln!("  Run: cd frontend && npm install && npm run build");
+    }
+
     let app = Router::new()
         .route("/api/requests", get(get_requests))
         .route("/ws", get(ws_handler))
@@ -57,7 +66,10 @@ pub async fn run_web_server(
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
-    tracing::info!("Web server listening on port {}", port);
+    eprintln!("  Web UI: http://localhost:{}", port);
+
+    // Signal that we're ready before entering the serve loop
+    let _ = ready_tx.send(());
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -88,6 +100,8 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WebState>) {
         return;
     }
     drop(requests);
+
+    // Forward live events
     loop {
         match rx.recv().await {
             Ok(event) => {
