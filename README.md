@@ -40,18 +40,26 @@ sudo cp ca.crt /usr/local/share/ca-certificates/proxyclawd.crt
 sudo update-ca-certificates
 ```
 
-**Or without root (simplest):**
+**Linux/macOS (no root required):**
 ```bash
 export NODE_EXTRA_CA_CERTS=$(pwd)/ca.crt
 ```
 
-3. Run Claude Code through the proxy:
+3. Run Claude Code through the proxy (in a separate terminal):
 
+**Linux/macOS:**
 ```bash
 HTTPS_PROXY=http://127.0.0.1:8080 NODE_EXTRA_CA_CERTS=$(pwd)/ca.crt claude
 ```
 
-4. Press Enter to launch the TUI and watch requests in real time.
+**Windows (PowerShell):**
+```powershell
+$env:HTTPS_PROXY = "http://127.0.0.1:8080"
+$env:NODE_EXTRA_CA_CERTS = "$pwd\ca.crt"
+claude
+```
+
+4. Press Enter in the proxy terminal to launch the TUI and watch requests in real time.
 
 ## TUI Controls
 
