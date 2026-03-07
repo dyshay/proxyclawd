@@ -81,6 +81,11 @@ export NODE_EXTRA_CA_CERTS=/path/to/ca.crt
 - `Up/Down` — navigate request list
 - `q` — quit
 
+## Screenshots 
+
+<img width="1907" height="1025" alt="image" src="https://github.com/user-attachments/assets/637f19ed-9f6b-4c4e-9fd0-a88c0484c696" />
+
+
 ## Releasing
 
 Releases are automatic. Bump the version in `Cargo.toml` and push — a GitHub Release with binaries for all platforms will be created.
