@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            use_cross: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            use_cross: false
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            use_cross: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.93
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
+      - name: Build with cross
+        if: matrix.use_cross
+        working-directory: mitm-proxy
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build with cargo
+        if: "!matrix.use_cross"
+        working-directory: mitm-proxy
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary (Linux)
+        if: runner.os == 'Linux' && !matrix.use_cross
+        run: strip mitm-proxy/target/${{ matrix.target }}/release/mitm-proxy
+
+      - name: Strip binary (Linux cross)
+        if: runner.os == 'Linux' && matrix.use_cross
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+          aarch64-linux-gnu-strip mitm-proxy/target/${{ matrix.target }}/release/mitm-proxy
+
+      - name: Strip binary (macOS)
+        if: runner.os == 'macOS'
+        run: strip mitm-proxy/target/${{ matrix.target }}/release/mitm-proxy
+
+      - name: Rename artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mv mitm-proxy/target/${{ matrix.target }}/release/mitm-proxy \
+             mitm-proxy-${{ matrix.target }}
+
+      - name: Rename artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mv mitm-proxy/target/${{ matrix.target }}/release/mitm-proxy.exe `
+             mitm-proxy-${{ matrix.target }}.exe
+
+      - name: Upload artifact (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mitm-proxy-${{ matrix.target }}
+          path: mitm-proxy-${{ matrix.target }}
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mitm-proxy-${{ matrix.target }}
+          path: mitm-proxy-${{ matrix.target }}.exe
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect binaries
+        run: |
+          mkdir -p release
+          find artifacts -type f -name 'mitm-proxy*' -exec mv {} release/ \;
+          ls -la release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release/*
