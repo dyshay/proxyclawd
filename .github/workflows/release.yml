@@ -75,11 +75,11 @@ jobs:
 
       - name: Build with cross
         if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build -p proxyclawd --release --target ${{ matrix.target }}
 
       - name: Build with cargo
         if: "!matrix.use_cross"
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build -p proxyclawd --release --target ${{ matrix.target }}
 
       - name: Strip binary (Linux)
         if: runner.os == 'Linux' && !matrix.use_cross

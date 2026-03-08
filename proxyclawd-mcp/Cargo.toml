@@ -1,0 +1,21 @@
+[package]
+name = "proxyclawd-mcp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.93"
+description = "MCP server for ProxyClawd MITM proxy"
+
+[dependencies]
+rmcp = { version = "1", features = ["server", "transport-io", "macros", "schemars"] }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
+schemars = "1"

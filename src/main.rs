@@ -25,11 +25,20 @@ struct Cli {
     /// Web UI port
     #[arg(long, default_value = "3000")]
     web_port: u16,
+
+    /// Run without the TUI (headless mode). Requires --web.
+    #[arg(long)]
+    headless: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if cli.headless && !cli.web {
+        eprintln!("Error: --headless requires --web (otherwise nothing is accessible)");
+        std::process::exit(1);
+    }
 
     // Initialize file-based logging (TUI owns stdout)
     let log_dir = std::env::current_dir()?.join("logs");
@@ -99,11 +108,15 @@ async fn main() -> Result<()> {
             cli.web_port
         );
     }
-    eprintln!();
-    eprintln!("  Press Enter to start...");
+    if !cli.headless {
+        eprintln!();
+        eprintln!("  Press Enter to start...");
 
-    let mut buf = String::new();
-    std::io::stdin().read_line(&mut buf)?;
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf)?;
+    } else {
+        eprintln!();
+    }
 
     // Create broadcast event channel
     let (event_tx, _) = broadcast::channel::<state::ProxyEvent>(4096);
@@ -143,15 +156,31 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Run TUI on main thread
-    let tui_rx = event_tx.subscribe();
-    let tui_result = tui::run_tui(tui_rx, ca_cert_path).await;
+    if cli.headless {
+        // Headless mode: wait for Ctrl+C
+        eprintln!("  Running in headless mode (no TUI). Press Ctrl+C to stop.");
+        eprintln!();
+        tokio::signal::ctrl_c().await?;
+        eprintln!("\nShutting down...");
+    } else {
+        // Run TUI on main thread
+        let tui_rx = event_tx.subscribe();
+        let tui_result = tui::run_tui(tui_rx, ca_cert_path).await;
 
-    // Cleanup
+        // Cleanup
+        proxy_handle.abort();
+        if let Some(handle) = web_handle {
+            handle.abort();
+        }
+
+        return tui_result;
+    }
+
+    // Cleanup (headless path)
     proxy_handle.abort();
     if let Some(handle) = web_handle {
         handle.abort();
     }
 
-    tui_result
+    Ok(())
 }
